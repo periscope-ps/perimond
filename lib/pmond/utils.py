@@ -1,4 +1,5 @@
-
+import logging
+baselog = logging.getLogger("pmond")
 
 UNITS = {
     "B":   2**0,

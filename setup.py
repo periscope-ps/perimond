@@ -17,9 +17,10 @@ from setuptools import setup, Command
 
 import sys, os
 
-PACKAGE="lib"
+NAME="pmond"
+PACKAGE=f"lib/{NAME}"
 with open(os.path.join(f"{PACKAGE}", "version.py")) as f:
-    code = compile(f.read(), f"version.py", 'exec')
+    code = compile(f.read(), "version.py", "exec")
     exec(code)
 
 
@@ -48,7 +49,7 @@ class tester(Command):
 setup(
     name="pmond",
     version=__version__,
-    packages=["pmond", "pmond.probes", "pmond.probes.static", "pmond.dblayer"],
+    packages=[f"{NAME}", f"{NAME}.probes", f"{NAME}.probes.static", f"{NAME}.dblayer"],
     package_dir={'': 'lib'},
     author="Jeremy Musser",
     author_email="jemusser@iu.edu",
@@ -59,7 +60,7 @@ setup(
     cmdclass={'test': tester },
     entry_points = {
         'console_scripts': [
-            'perimond = pmond:main',
+            f"perimond = {NAME}:main",
         ]
     },
 )
