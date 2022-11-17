@@ -96,8 +96,10 @@ class HostProbe(FileProbe):
     async def run(self):
         results = await asyncio.gather(self.machineid(), self.mem(), self.drives(), self.cpus())
         name = socket.getfqdn()
-        if name == "localhost":
-            name = ''
+        if "localdomain" in name:
+            name = socket.gethostname()
+            if "localhost" in name:
+                name = ''
         return {
             "name": socket.getfqdn(),
             "id": results[0],
