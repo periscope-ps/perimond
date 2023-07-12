@@ -2,105 +2,85 @@ import logging, pprint, time, asyncio, json, importlib, signal
 
 from collections import defaultdict
 from uuid import uuid4
-from pmond import dblayer, probes, config, settings, utils
-from pmond.config import Argument
+from pmond import dblayer, probes, settings, config, utils
 from pmond.probes import static
-from pmond.version import __version__
-
-args = (
-    Argument("-p", "--probes", "", str, "Path to a probe configuration file"),
-    Argument("-D", "--dryrun", False, bool, "Print results of measurements to stdout"),
-    Argument("-o", "--oneoff", False, bool, "Execute probes once, then terminate"),
-    Argument("-r", "--db.remotes", "", str, "Comma delimited list of remote urls"),
-    Argument("-l", "--db.ttl", 600, int, "Record TTL (seconds) for generated instances")
-)
-
-"""
-[
-  {
-    "name": "host",
-    "schedule": {"pmond.schedulers.Periodic": { "period": 10 }},
-    "probes": {"pmond.probes.static.HostReader": {}},
-  },
-  {
-    "schedule": {"pmond.schedulers.Periodic": { "period": 10 }},
-    "probes": {"pmond.probes.static.PortsReader": {}},
-  },
-  {
-    "schedule": {"pmond.schedulers.Periodic": {}},
-    "probes": {"pmond.probes.CpuReader": {}},
-    "requires": "host"
-  }
-]
-"""
-
 
 log = utils.baselog
 class Manager(object):
     def __init__(self, conf):
         self.runners = []
         self._c = conf
-        self._dryrun = []
+        self._dryrun = defaultdict(list)
 
     @property
     def record(self):
         return self._dryrun
+
     async def _apply(self, name, sched, deps):
         loop = asyncio.get_event_loop()
         first = True
         async for v in sched:
-            for s in v[0] + v[1]:
-                if hasattr(s, "expires"):
-                    s.expires = int((time.time() + self._c["db"]["ttl"]) * 1_000_000)
+            for s in sum([x for k,x in v[0].items()], []) + v[1]:
+                if hasattr(s, "ttl"):
+                    s.expires = int(self._c["db"]["ttl"]) * 1_000_000
             if self._c["dryrun"]:
-                for s in v[0]:
-                    s = dict(s)
-                    s[":ts"] = int(time.time() * 1_000_000)
-                    self._dryrun.append(s)
+                for k,ls in v[0].items():
+                    for s in ls:
+                        s = dict(s)
+                        s[":ts"] = int(time.time() * 1_000_000)
+                        self._dryrun[k].append(s)
                 for p in v[1]:
                     s = dict(s)
-                    s[":ts"] = int(time.time() * 1_000_000)
-                    self._dryrun.append(s)
+                    s[":ts"] = int(time.time() * 1_000_00)
+                    self._dryrun["meas"].append(s)
             else:
                 # TMP
                 pprint.pprint({"static": v[0], "meas": v[1]})
-                # TODO: DBLayer
-                pass
+                # TODO: DBLayer [send results to the mundus database]
             if first:
                 first = False
                 for n,task in deps.get(name, []):
-                    log.info(f"Starting probe runner {'- ' + name if name else ''}")
-                    self.runners.append(loop.create_task(self._apply(name, task, deps)))
+                    log.info(f"Starting probe runner {'- ' + n if n else ''}")
+                    self.runners.append(loop.create_task(self._apply(n, task, deps)))
 
     def load(self):
         if self._c["probes"]:
             try:
                 with open(self._c["probes"], 'r') as f:
                     log.info(f"Reading probefile - '{self._c['probes']}'")
-                    probes = json.load(f)
+                    pconfig = json.load(f)
             except OSError:
-                log.error("Cannot load probes")
+                log.error("Cannot load probes file")
                 exit(-1)
         else:
             log.info("Loading default probes")
-            probes = settings.DEFAULT_PROBES
+            pconfig = settings.DEFAULT_PROBES
         tasks, deps = [], defaultdict(list)
-        for p in probes:
+        for event in pconfig:
             readers = []
-            for k,v in p["probes"].items():
+            for k,v in event["probes"].items():
                 path = k.split('.')
-                readers.append(getattr(importlib.import_module(".".join(path[:-1])), path[-1])(**v))
-            for k,v in p["schedule"].items():
+                try:
+                    if "midfile" in v:
+                        v["midfile"] = self._c["midfile"]
+                    cls = getattr(importlib.import_module(".".join(path[:-1])), path[-1])
+                    readers.append(cls(**v))
+                except ImportError:
+                    log.error(f"Failed to load probe module - '{k}'")
+            for k,v in event["schedule"].items():
                 if self._c["dryrun"] or self._c["oneoff"]:
                     k,v = "pmond.schedulers.once.Once", {}
                 path = k.split('.')
-                Sched = getattr(importlib.import_module(".".join(path[:-1])), path[-1])
+                try:
+                    Schedule = getattr(importlib.import_module(".".join(path[:-1])), path[-1])
+                except ImportError:
+                    log.error(f"Failed to load schedule module - '{k}'")
                 for reader in readers:
-                    sched = Sched(reader, **v)
-                    if "requires" in p:
-                        deps[p["requires"]].append((p.get("name", None), sched))
+                    probe = Schedule(reader, **v)
+                    if "requires" in event:
+                        deps[event["requires"]].append((event.get("name", None), probe))
                     else:
-                        tasks.append((p.get("name", None), sched))
+                        tasks.append((event.get("name", None), probe))
 
         loop = asyncio.get_event_loop()
         for name,task in tasks:
@@ -119,14 +99,11 @@ class Manager(object):
         self.load()
 
 def main():
-    conf = config.from_template(args, desc="System registration and monitoring suite",
-                                filevar="$PMOND_CONFPATH",
-                                version=__version__)
-    manager = Manager(conf)
+    manager = Manager(config.args)
     signal.signal(signal.SIGHUP, lambda signum, frame: manager.restart())
     manager.load()
     asyncio.get_event_loop().run_until_complete(manager.start())
-    if conf["dryrun"]:
+    if config.args["dryrun"]:
         print(json.dumps(manager.record, indent=2))
 
 if __name__ == "__main__":

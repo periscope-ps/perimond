@@ -1,19 +1,19 @@
 import asycnio
 
 from pmond.exceptions import ProbeFailure
-from pmond.probes.abc import FileProbe, ProbeResult, Measurement, Reader
+from pmond.probes.abc import NodeProbe, ProbeResult, Measurement, Reader
 from pmond import utils
 
 log = utils.baselog.getChild("probe.cpu")
 class CpuReader(Reader):
     async def read(self):
         log.debug("Reading [cpu]")
-        probe = CpuProbe()
-        uid, results = await asyncio.gather(probe.machineid(), probe.run())
+        probe = CpuProbe(**self._probe_args)
+        uid, results = await asyncio.gather(probe.subject(), probe.run())
         return ProbeResult([], [Measurement(uid, f"blipp:cpu:{n}", v) for n,v in results.items()])
 
-class CpuProbe(FileProbe):
-    def __init__(self, *args, **kwargs):
+class CpuProbe(NodeProbe):
+    def __init__(self):
         self.hz = 0
         self.vals = defaultdict(lambda: 0)
 

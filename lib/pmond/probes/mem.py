@@ -1,7 +1,7 @@
 import asyncio
 
 from pmond import utils
-from pmond.probes.abc import FileProbe, ProbeResult, Measurement, Reader
+from pmond.probes.abc import NodeProbe, ProbeResult, Measurement, Reader
 from pmond.exceptions import ProbeFailure
 
 log = utils.baselog.getChild("probe.mem")
@@ -9,10 +9,10 @@ class MemReader(Reader):
     async def read(self):
         log.debug("Reading [mem]")
         probe = MemProbe()
-        uid, results = await asyncio.gather(probe.machineid(), probe.run())
+        uid, results = await asyncio.gather(probe.subject(), probe.run())
         return ProbeResult([], [Measurement(uid, f"blipp:mem:{n}", v) for n,v in results.items()])
 
-class MemProbe(FileProbe):
+class MemProbe(NodeProbe):
     async def run(self):
         lines = await self.readfile("/proc/meminfo")
         if lines is None:

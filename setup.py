@@ -54,8 +54,12 @@ setup(
     author="Jeremy Musser",
     author_email="jemusser@iu.edu",
     license="http://www.apache.org/licenses/LICENSE-2.0",
+    dependency_links=[
+        "git+https://github.com/periscope-ps/unisrt.git/@v2.0.0#egg=mundus"
+    ],
     install_requires=[
-        "netifaces"
+        "netifaces",
+        "mundus"
     ],
     cmdclass={'test': tester },
     entry_points = {

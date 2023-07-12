@@ -1,14 +1,14 @@
 import asyncio
 from pmond import utils
 from pmond.exceptions import ProbeFailure
-from pmond.probes.abc import FileProbe, ProbeResult, Measurement, Reader
+from pmond.probes.abc import NodeProbe, ProbeResult, Measurement, Reader
 
 log = utils.baselog.getChild("probe.mem")
 class NetReader(Reader):
     async def read(self):
         log.debug("Reading [net]")
         probe = NetProbe()
-        uid, results = await asyncio.gather(probe.machineid(), probe.run())
+        uid, results = await asyncio.gather(probe.subject(), probe.run())
         pid = f"uuid:port:{uid.split(':')[-1]}"
         meas = []
         for n,v in results.items():
@@ -19,7 +19,7 @@ class NetReader(Reader):
                 meas.append(Measurement(f"{pid}:{n.split(':')[0]}", f"blipp:net:{n}", v))
         return ProbeResult([], meas)
 
-class NetProbe(FileProbe):
+class NodeProbe(FileProbe):
     async def run(self):
         devs, snmp = await asyncio.gather(self.readfile("/proc/net/dev"),
                                           self.readfile("/proc/net/snmp"))

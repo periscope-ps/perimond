@@ -1,10 +1,10 @@
 import logging, netifaces, asyncio, socket
-from uuid import uuid4
 
 from mundus.models import get_class
+from mundus.query import Is
 
 from pmond import utils, settings
-from pmond.probes.abc import FileProbe, ProbeResult, Reader
+from pmond.probes.abc import NodeProbe, ProbeResult, Reader
 from pmond.exceptions import ProbeFailure
 
 log = utils.baselog.getChild("probe.host")
@@ -22,9 +22,9 @@ class HostReader(Reader):
         for i,c in enumerate(sorted(host["cpus"], key=lambda x: x["index"])):
             result.cpus.append({"model": c["model"], "speed": c["speed"], "features": c["features"]})
             result.cache.append({"level": 1, "size": c["cache"], "serves": i})
-        return ProbeResult([result], [])
+        return ProbeResult({"nodes": [result]}, [])
 
-class HostProbe(FileProbe):
+class HostProbe(NodeProbe):
     async def mem(self):
         lines = await self.readfile("/proc/meminfo")
         if lines is None:
@@ -94,7 +94,7 @@ class HostProbe(FileProbe):
         return list(sorted(results, key=lambda x: int(x["index"])))
 
     async def run(self):
-        results = await asyncio.gather(self.machineid(), self.mem(), self.drives(), self.cpus())
+        results = await asyncio.gather(self.subject(), self.mem(), self.drives(), self.cpus())
         name = socket.getfqdn()
         if "localdomain" in name:
             name = socket.gethostname()
@@ -114,25 +114,41 @@ Relationship = get_class(settings.REL)
 class PortsReader(Reader):
     async def read(self):
         log.debug("Reading [ports]")
-        results = []
-        for k,v in (await PortsProbe().run()).items():
+        results = {"ports": [], "owns": [], "contains": []}
+        probe = PortsProbe()
+        ports = await probe.run()
+        subject = await probe.subject()
+        if ports:
+            try:
+                node = await (Is(Node).urn == subject).afirst()
+            except StopIteration: pass
+            
+        for k,v in ports.items():
             l2s = []
             phy = Port({"urn": k,"addressType": "phy", "address": k.split(':')[-1]})
+            results["owns"].append(Relationship({"subject": f"nodes/{node.id}",
+                                                 "target": f"ports/{phy.id}"}))
             for l2 in v:
                 if l2["type"] == "eth":
                     p = Port({"addressType": l2["type"], "address": l2["addr"]})
-                    results.append(Relationship({"subject": phy, "target": p}))
-                    results.append(p)
+                    results["contains"].append(Relationship({"subject": f"ports/{phy.id}",
+                                                             "target": f"ports/{p.id}"}))
+                    results["owns"].append(Relationship({"subject": f"nodes/{node.id}",
+                                                         "target": f"ports/{p.id}"}))
+                    results["ports"].append(p)
                     l2s.append(p)
             for l3 in v:
                 if l3["type"] in ["ipv4", "ipv6"]:
                     p = Port({"addressType": l3["type"], "address": l3["addr"]})
+                    results["owns"].append(Relationship({"subject": f"nodes/{node.id}",
+                                                         "target": f"ports/{p.id}"}))
                     for l2 in l2s:
-                        results.append(Relationship({"subject": l2, "target": p}))
-                    results.append(p)
+                        results["contains"].append(Relationship({"subject": f"ports/{l2.id}",
+                                                                 "target": f"ports/{p.id}"}))
+                    results["ports"].append(p)
         return ProbeResult(results, [])
 
-class PortsProbe(FileProbe):
+class PortsProbe(NodeProbe):
     def _copy_props(self, iface, ty, vals, props):
         k = set(vals.keys())
         p = set(props)
@@ -174,7 +190,7 @@ class PortsProbe(FileProbe):
         return results
 
     async def run(self):
-        uid = await self.machineid()
+        uid = await self.subject()
         pid = f"uuid:port:{uid.split(':')[-1]}"
         ifaces = self.get_phys()
         for k,v in self.get_l2(ifaces.keys()).items(): ifaces[k].extend(v)
